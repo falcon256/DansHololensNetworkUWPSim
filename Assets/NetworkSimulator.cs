@@ -31,6 +31,7 @@ public class NetworkSimulator : MonoBehaviour
     public int targetPort = 32123;
     public string targetIP = "";
     public bool targetIPReady = false;
+    public bool socketStarted = false;
     public volatile bool connected = false;
     private ConcurrentQueue<messagePackage> outgoingQueue = null;
     public UnityEngine.UI.Text outputText = null;
@@ -40,8 +41,9 @@ public class NetworkSimulator : MonoBehaviour
     private ConcurrentQueue<lrStruct> incomingLineRenderers = null;
     private bool undoLineRenderer = false;
     public Material LineRendererDefaultMaterial = null;
+
+    public string debugText = "";
 #if !UNITY_EDITOR
-    //public DatagramSocket udpClient = null;
     public StreamSocket tcpClient = null;
     public Windows.Storage.Streams.IOutputStream outputStream = null;
     public Windows.Storage.Streams.IInputStream inputStream = null;
@@ -78,7 +80,7 @@ public class NetworkSimulator : MonoBehaviour
         incomingLineRenderers = new ConcurrentQueue<lrStruct>();
         outgoingQueue = new ConcurrentQueue<messagePackage>();
         NetworkSimulatorSingleton = this;
-        setupSocket();
+        
 #if !UNITY_EDITOR
         Listen();
 #endif
@@ -87,20 +89,20 @@ public class NetworkSimulator : MonoBehaviour
     {
 
 #if !UNITY_EDITOR
-        //udpClient = new DatagramSocket();
-        //udpClient.Control.DontFragment = true;
         tcpClient = new Windows.Networking.Sockets.StreamSocket();
         tcpClient.Control.NoDelay = false;
         tcpClient.Control.KeepAlive = false;
         tcpClient.Control.OutboundBufferSizeInBytes = 1500;
+       
         while (!connected)
         {
             try
             {
-                //await udpClient.BindServiceNameAsync("" + targetPort);
+                textOut("Connecting to " + targetIP + " " + targetPort);
                 await tcpClient.ConnectAsync(new HostName(targetIP), "" + targetPort);
+                textOut("Connected!");
 
-                outputStream = tcpClient.OutputStream;
+               outputStream = tcpClient.OutputStream;
                 inputStream = tcpClient.InputStream;
                 writer = new DataWriter(outputStream);
                 reader = new DataReader(inputStream);
@@ -110,6 +112,7 @@ public class NetworkSimulator : MonoBehaviour
                 {
                     if(reader.UnconsumedBufferLength>4)
                     {
+                        textOut("Reading....");
                         int incomingSize = reader.ReadInt32();
                         if(incomingSize>0&&incomingSize < 100000)
                         {
@@ -120,7 +123,7 @@ public class NetworkSimulator : MonoBehaviour
                                 System.Threading.Tasks.Task.Delay(100).Wait();
                             }
                             */
-
+                            textOut("Getting new Line!");
                             int packetType = reader.ReadInt32();
                             float r = reader.ReadSingle();
                             float g = reader.ReadSingle();
@@ -167,8 +170,9 @@ public class NetworkSimulator : MonoBehaviour
             }
             catch (Exception e)
             {
-                Debug.Log(e.ToString());
+                Debug.LogError(e.ToString());
                 connected = false;
+                socketStarted = false;
                 return;
             }
         }
@@ -181,6 +185,7 @@ public class NetworkSimulator : MonoBehaviour
         listenerSocket = new DatagramSocket();
         listenerSocket.MessageReceived += udpMessageReceived;
         await listenerSocket.BindServiceNameAsync(udpPort);
+        textOut("Listening for udp broadcast.");
     }
 
     async void udpMessageReceived(DatagramSocket socket, DatagramSocketMessageReceivedEventArgs args)
@@ -190,16 +195,24 @@ public class NetworkSimulator : MonoBehaviour
             DataReader reader = args.GetDataReader();
             uint len = reader.UnconsumedBufferLength;
             string msg = reader.ReadString(len);
-
             string remoteHost = args.RemoteAddress.DisplayName;
-            reader.Dispose();
+            targetIP = msg;
+            targetIPReady = true;
             textOut("" + msg);
+            
+
+
+            //socket.Dispose();
+            /* //exception smashing test
+            reader.Dispose();
+           
             await Windows.ApplicationModel.Core.CoreApplication.GetCurrentView().CoreWindow.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
             {
                 targetIP = msg;
                 targetIPReady = true;
                 textOut("UDP Set up. "+targetIP+" "+targetIPReady);
             });
+            */
         }
     }
 #endif
@@ -245,7 +258,7 @@ public class NetworkSimulator : MonoBehaviour
         }
         catch (Exception e)
         {
-            textOut(""+ e.ToString());
+            textOut("248"+ e.ToString());
             Debug.Log(e.ToString());
             return;
         }
@@ -256,19 +269,28 @@ public class NetworkSimulator : MonoBehaviour
 
     public void textOut(string o)
     {
-        if (outputText == null)
-            return;
-
-        outputText.text = currentOutput += "\n" + o;
-        if(outputText.text.Length>1000)
+        currentOutput += "\n" + o;
+        if(currentOutput.Length>500)
         {
-            outputText.text = currentOutput.Substring(currentOutput.Length - 500);
+            currentOutput = currentOutput.Substring(currentOutput.Length - 500);
         }
         
     }
 #if !UNITY_EDITOR
     void FixedUpdate()
     {
+
+        if(!socketStarted&&targetIPReady)
+        {
+            socketStarted = true;
+            listenerSocket.Dispose();
+            listenerSocket = null;
+            setupSocket();
+        }
+        if(outputText != null)
+        {
+            outputText.text = currentOutput;
+        }
         if (!outgoingQueue.IsEmpty)
         {
             messagePackage mp = null;
@@ -341,7 +363,7 @@ public class NetworkSimulator : MonoBehaviour
         }
         catch (Exception e)
         {
-           textOut("" + e.ToString());
+           textOut("344" + e.ToString());
            Debug.Log(e.ToString());
            return;
         }
