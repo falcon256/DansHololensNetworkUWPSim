@@ -1,12 +1,13 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using System;
 using System.Text;
 using System.Net;
 using System.Net.Sockets;
 using System.Collections.Concurrent;
-
+using System.Threading.Tasks;
 #if !UNITY_EDITOR
 using Windows.Networking;
 using Windows.Networking.Connectivity;
@@ -21,6 +22,7 @@ using System.IO.Compression;
 using System.Linq;
 using UnityEngine.XR.WSA;
 using UnityEngine.XR.WSA.WebCam;
+
 #endif
 
 
@@ -41,13 +43,14 @@ public class NetworkSimulator : MonoBehaviour
     private ConcurrentQueue<lrStruct> incomingLineRenderers = null;
     private bool undoLineRenderer = false;
     public Material LineRendererDefaultMaterial = null;
-
+    public InputField Derp = null;
     public string debugText = "";
 #if !UNITY_EDITOR
+
     public StreamSocket tcpClient = null;
     public Windows.Storage.Streams.IOutputStream outputStream = null;
     public Windows.Storage.Streams.IInputStream inputStream = null;
-    DataWriter writer = null;//new DataWriter(outputStream);
+    DataWriter writer = null;
     DataReader reader = null;
 
     //udp broadcast listening
@@ -85,7 +88,15 @@ public class NetworkSimulator : MonoBehaviour
         Listen();
 #endif
     }
-    public async void setupSocket()
+
+    public void doSocketSetup()
+    {
+        //Task t = 
+            setupSocket();
+        //t.Start();
+    }
+
+    public async Task setupSocket()
     {
 
 #if !UNITY_EDITOR
@@ -93,6 +104,7 @@ public class NetworkSimulator : MonoBehaviour
         tcpClient.Control.NoDelay = false;
         tcpClient.Control.KeepAlive = false;
         tcpClient.Control.OutboundBufferSizeInBytes = 1500;
+        
        
         while (!connected)
         {
@@ -101,28 +113,33 @@ public class NetworkSimulator : MonoBehaviour
                 textOut("Connecting to " + targetIP + " " + targetPort);
                 await tcpClient.ConnectAsync(new HostName(targetIP), "" + targetPort);
                 textOut("Connected!");
-
+                
                outputStream = tcpClient.OutputStream;
                 inputStream = tcpClient.InputStream;
                 writer = new DataWriter(outputStream);
                 reader = new DataReader(inputStream);
+                reader.UnicodeEncoding = Windows.Storage.Streams.UnicodeEncoding.Utf8;
+                reader.ByteOrder = Windows.Storage.Streams.ByteOrder.LittleEndian;
+                reader.InputStreamOptions = InputStreamOptions.Partial;
                 connected = true;
-                incomingBuffer = new byte[0];
+                
                 while (connected)
                 {
-                    if(reader.UnconsumedBufferLength>4)
+                    await reader.LoadAsync(8192);
+                    if (reader.UnconsumedBufferLength>4)
                     {
                         textOut("Reading....");
                         int incomingSize = reader.ReadInt32();
                         if(incomingSize>0&&incomingSize < 100000)
                         {
-                            await reader.LoadAsync((uint)incomingSize);//preloads the buffer with the data which makes the following not needed.
-                            /*
+                            //await reader.LoadAsync((uint)incomingSize);//preloads the buffer with the data which makes the following not needed.
+                            
                             while (reader.UnconsumedBufferLength<incomingSize)
                             {
                                 System.Threading.Tasks.Task.Delay(100).Wait();
+                                await reader.LoadAsync(8192);
                             }
-                            */
+                            
                             textOut("Getting new Line!");
                             int packetType = reader.ReadInt32();
                             float r = reader.ReadSingle();
@@ -136,16 +153,19 @@ public class NetworkSimulator : MonoBehaviour
                             reader.ReadBytes(packet);
                             if(packetType==4&&packet.Length>0)
                             {
-                                lrStruct l = new lrStruct();
-                                l.r = r;
-                                l.g = g;
-                                l.b = b;
-                                l.a = a;
-                                l.pc = count;
-                                l.sw = sw;
-                                l.ew = ew;
-                                l.verts = new Vector3[count];
-                                for(int i = 0; i < count; i++)//Dan actually wrote this one from scratch, so might be bugged.
+                                lrStruct l = new lrStruct
+                                {
+                                    r = r,
+                                    g = g,
+                                    b = b,
+                                    a = a,
+                                    pc = count,
+                                    sw = sw,
+                                    ew = ew,
+                                    verts = new Vector3[count]
+                                };
+                                textOut("" + count + " " + r + " " + g + " " + b + " " + sw + " " + ew);
+                                for (int i = 0; i < count; i++)//Dan actually wrote this one from scratch, so might be bugged.
                                 {                 
                                     l.verts[i]=new Vector3(BitConverter.ToSingle(packet, i*12+0), BitConverter.ToSingle(packet, i * 12 + 4),
                                         BitConverter.ToSingle(packet, i * 12 + 8));
@@ -163,6 +183,7 @@ public class NetworkSimulator : MonoBehaviour
                         }
 
                     }
+                    
                 }
 
 
@@ -178,6 +199,13 @@ public class NetworkSimulator : MonoBehaviour
         }
 #endif
     }
+
+    public void forceLocalConnection()
+    {
+        targetIP = Derp.text;
+        targetIPReady = true;
+    }
+
 #if !UNITY_EDITOR
 
     private async void Listen()
@@ -188,9 +216,10 @@ public class NetworkSimulator : MonoBehaviour
         textOut("Listening for udp broadcast.");
     }
 
+
     async void udpMessageReceived(DatagramSocket socket, DatagramSocketMessageReceivedEventArgs args)
     {
-        if (!targetIPReady)
+        if (!targetIPReady&&!connected)
         {
             DataReader reader = args.GetDataReader();
             uint len = reader.UnconsumedBufferLength;
@@ -199,6 +228,9 @@ public class NetworkSimulator : MonoBehaviour
             targetIP = msg;
             targetIPReady = true;
             textOut("" + msg);
+            listenerSocket.MessageReceived -= udpMessageReceived;
+            listenerSocket.Dispose();
+            listenerSocket = null;//new since working
             
 
 
@@ -266,7 +298,7 @@ public class NetworkSimulator : MonoBehaviour
     }
 
 
-
+    
     public void textOut(string o)
     {
         currentOutput += "\n" + o;
@@ -283,9 +315,7 @@ public class NetworkSimulator : MonoBehaviour
         if(!socketStarted&&targetIPReady)
         {
             socketStarted = true;
-            listenerSocket.Dispose();
-            listenerSocket = null;
-            setupSocket();
+            doSocketSetup();
         }
         if(outputText != null)
         {
