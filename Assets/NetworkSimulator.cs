@@ -45,6 +45,7 @@ public class NetworkSimulator : MonoBehaviour
     public Material LineRendererDefaultMaterial = null;
     public InputField Derp = null;
     public string debugText = "";
+    public bool trashUDP = false;
 #if !UNITY_EDITOR
 
     public StreamSocket tcpClient = null;
@@ -52,7 +53,7 @@ public class NetworkSimulator : MonoBehaviour
     public Windows.Storage.Streams.IInputStream inputStream = null;
     DataWriter writer = null;
     DataReader reader = null;
-
+    
     //udp broadcast listening
     DatagramSocket listenerSocket = null;
     const string udpPort = "32124";
@@ -149,8 +150,8 @@ public class NetworkSimulator : MonoBehaviour
                             int count = reader.ReadInt32();// this is actually just for padding...
                             float sw = reader.ReadSingle();
                             float ew = reader.ReadSingle();
-                            byte[] packet = new byte[incomingSize-32];
-                            reader.ReadBytes(packet);
+                            byte[] packet = new byte[incomingSize-36];
+                            //reader.ReadBytes(packet);
                             if(packetType==4&&packet.Length>0)
                             {
                                 lrStruct l = new lrStruct
@@ -164,13 +165,14 @@ public class NetworkSimulator : MonoBehaviour
                                     ew = ew,
                                     verts = new Vector3[count]
                                 };
-                                textOut("" + count + " " + r + " " + g + " " + b + " " + sw + " " + ew);
-                                for (int i = 0; i < count; i++)//Dan actually wrote this one from scratch, so might be bugged.
+                                textOut("" + count + " " + r + " " + g + " " + b + " " + a + " " + sw + " " + ew + "\n" + "Count Suggested Bytes:"+(count*4*3)+" Preloaded Package Size:"+packet.Length);
+
+                                for (int i = 0; i < count; i++)//Dan Simplified this. Probably not bugged.
                                 {                 
-                                    l.verts[i]=new Vector3(BitConverter.ToSingle(packet, i*12+0), BitConverter.ToSingle(packet, i * 12 + 4),
-                                        BitConverter.ToSingle(packet, i * 12 + 8));
+                                    l.verts[i]=new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
                                 }
                                 incomingLineRenderers.Enqueue(l);
+                                textOut("Line Renderer Enqueued");
                             }
                             if (packetType == 5)
                                 undoLineRenderer = true;
@@ -208,7 +210,7 @@ public class NetworkSimulator : MonoBehaviour
 
 #if !UNITY_EDITOR
 
-    private async void Listen()
+    private async Task Listen()
     {
         listenerSocket = new DatagramSocket();
         listenerSocket.MessageReceived += udpMessageReceived;
@@ -219,8 +221,9 @@ public class NetworkSimulator : MonoBehaviour
 
     async void udpMessageReceived(DatagramSocket socket, DatagramSocketMessageReceivedEventArgs args)
     {
-        if (!targetIPReady&&!connected)
+        if (!targetIPReady&&!connected&&!trashUDP)
         {
+            trashUDP = true;
             DataReader reader = args.GetDataReader();
             uint len = reader.UnconsumedBufferLength;
             string msg = reader.ReadString(len);
@@ -228,6 +231,7 @@ public class NetworkSimulator : MonoBehaviour
             targetIP = msg;
             targetIPReady = true;
             textOut("" + msg);
+            await listenerSocket.CancelIOAsync();
             listenerSocket.MessageReceived -= udpMessageReceived;
             listenerSocket.Dispose();
             listenerSocket = null;//new since working
@@ -338,7 +342,9 @@ public class NetworkSimulator : MonoBehaviour
             lrStruct l = new lrStruct();
             if(incomingLineRenderers.TryDequeue(out l))
             {
-                LineRenderer lr = this.gameObject.AddComponent<LineRenderer>();
+                GameObject go = new GameObject();
+                go.transform.parent = this.gameObject.transform;
+                LineRenderer lr = go.gameObject.AddComponent<LineRenderer>();
                 lr.material = new Material(LineRendererDefaultMaterial);//copy
                 lr.material.color = new Color(l.r, l.g, l.b, l.a);
                 lr.startWidth = l.sw;
